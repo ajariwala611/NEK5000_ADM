@@ -1,0 +1,703 @@
+!-----------------------------------------------------------------------
+!  nek5000 user-file template
+!
+!  user specified routines:
+!     - uservp  : variable properties
+!     - userf   : local acceleration term for fluid
+!     - userq   : local source term for scalars
+!     - userbc  : boundary conditions
+!     - useric  : initial conditions
+!     - userchk : general purpose routine for checking errors etc.
+!     - userqtl : thermal divergence for lowMach number flows 
+!     - usrdat  : modify element vertices 
+!     - usrdat2 : modify mesh coordinates
+!     - usrdat3 : general purpose routine for initialization
+!     
+!-----------------------------------------------------------------------
+!   nek5000 constants
+
+! Number of tracer particles
+#define INTP_NMAX 5000 
+
+!
+!-----------------------------------------------------------------------
+      subroutine uservp(ix,iy,iz,eg) ! set variable properties
+
+!      implicit none
+
+      integer ix,iy,iz,eg
+     
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      integer e
+!     e = gllel(eg)
+
+      udiff  = 0.0
+      utrans = 0.0
+
+      return
+      end
+!-----------------------------------------------------------------------
+      subroutine userf(ix,iy,iz,eg) ! set acceleration term
+!
+!         Note: this is an acceleration term, NOT a force!
+!         Thus, ffx will subsequently be multiplied by rho(x,t).
+!
+!         Note: This function will be used to implemend immersed boundary forces.
+!         Assumes constant rho = 1
+!
+!         Modified by Alex Tsolovikos on 2022-01-12
+!
+          implicit none
+
+          integer ix,iy,iz,eg
+          real pgain, igain
+
+          include 'SIZE'
+          include 'TOTAL'
+          include 'NEKUSE'
+
+          real fxintg(lx1,ly1,lz1,lelt), fyintg(lx1,ly1,lz1,lelt), fzintg(lx1,ly1,lz1,lelt)
+          integer imatrix(lx1,ly1,lz1,lelt)
+          common /ibforces/ fxintg, fyintg, fzintg, imatrix
+		  
+		  real dia, thick, angle, Amatrix(lx1,ly1,lz1,lelt)
+		  common /adm_yaw/ dia, thick, angle, Amatrix	
+
+          integer e
+          e = gllel(eg)
+
+          pgain = uparam(3)
+          igain = uparam(4)
+
+          ffx = 0.0
+          ffy = 0.0
+          ffz = 0.0
+
+          ! Apply immersed boundary forces
+          ! Note:
+          !     no force:             imatrix = 0 (default)
+          !     solid boundary force: imatrix = 1
+          !     wall roughness:       imatrix = 2
+          !
+
+          if (imatrix(ix, iy, iz, e) == 1) then
+              ! Collect error for integral term
+              fxintg(ix, iy, iz, e) = fxintg(ix, iy, iz, e) + vx(ix, iy, iz, e)
+              fyintg(ix, iy, iz, e) = fyintg(ix, iy, iz, e) + vy(ix, iy, iz, e)
+              fzintg(ix, iy, iz, e) = fzintg(ix, iy, iz, e) + vz(ix, iy, iz, e)
+
+              ! PI Controller for IB forces
+              ffx = - pgain * vx(ix, iy, iz, e) - igain * fxintg(ix, iy, iz, e)
+              ffy = - pgain * vy(ix, iy, iz, e) - igain * fyintg(ix, iy, iz, e)
+              ffz = - pgain * vz(ix, iy, iz, e) - igain * fzintg(ix, iy, iz, e)
+		  else if (imatrix(ix,iy,iz,e) == 2) then
+			  ffx = - 0.75*0.5*(cos(angle))**3/thick
+			  ffy = 0.0
+			  ffz = 0.75*0.5*(cos(angle))**2*sin(angle)/thick
+          end if
+
+          return
+      end
+!-----------------------------------------------------------------------
+      subroutine userq(ix,iy,iz,eg) ! set source term
+
+!          implicit none
+
+          integer ix,iy,iz,eg
+
+          include 'SIZE'
+          include 'TOTAL'
+          include 'NEKUSE'
+
+          integer e
+!         e = gllel(eg)
+
+          qvol   = 0.0
+
+          return
+      end
+!-----------------------------------------------------------------------
+      subroutine userbc(ix,iy,iz,iside,eg) ! set up boundary conditions
+!
+!         NOTE ::: This subroutine MAY NOT be called by every process
+!
+!         The boundary conditions are:
+!             1) Blasius boundary layer at the inlet
+!             2) Convective BC at the outlet
+!             3) No-slip BC at the wall (y=0)
+!             4) v = V_Blasius, du/dy = dv/dx, dw/dy = dv/dz
+!                (zero vorticity) at the top (y=1)
+!             5) Periodic BC at the sides (z=0, z=1)
+!         NOTE ::: Only BCs 1) and 4) are implemented here. The others are 
+!                  implemented by the mesh.
+!         
+          implicit none
+
+          integer ix,iy,iz,iside,eg,e
+
+          include 'SIZE'
+          include 'TOTAL'
+          include 'NEKUSE'
+
+          real ub(lx1,ly1,lz1,lelt), vb(lx1,ly1,lz1,lelt)
+          common /blasiusvel/ ub, vb
+
+          real xp
+
+          e = gllel(eg)
+
+          if (cbu .eq. 'v  ') then
+                 ! Inlet boundary condition - Blasius
+                 ux   = 1.0
+                 uy   = 0.0
+                 uz   = 0.0
+                 temp = 0.0
+          end if
+
+          return
+      end
+!-----------------------------------------------------------------------
+      subroutine useric(ix,iy,iz,eg) ! set up initial conditions
+!
+!         Set the Blasius solution everywhere.
+!         Modified by Alex Tsolovikos on 2022-01-11
+!
+          implicit none
+
+          integer ix,iy,iz,eg,e
+
+          include 'SIZE'
+          include 'TOTAL'
+          include 'NEKUSE'
+
+          e = gllel(eg)
+          ux   = 1.0
+          uy   = 0.0
+          uz   = 0.0
+          temp = 0.0
+
+          return
+      end
+!-----------------------------------------------------------------------
+      subroutine userchk
+          include 'SIZE'
+          include 'TOTAL'
+
+          logical iffpts
+          save iffpts
+
+          real ymin, ymax
+          integer n
+          ! For turb_outflow
+		  real dia, thick, angle, Amatrix(lx1,ly1,lz1,lelt)
+		  common /adm_yaw/ angle, dia, thick, Amatrix	
+
+          character*21 :: filename_part
+          integer npart
+          real temp_vel(ldim,2:3,INTP_NMAX)
+          real p_loc(INTP_NMAX,ldim), p_loc_trans(ldim,INTP_NMAX)    
+          common /tracer_particles/ p_loc, p_loc_trans
+
+          n = nx1*ny1*nz1*nelv
+
+        !   if ( nid .eq. 0 ) then
+        !     npart = INTP_NMAX
+        !   else
+        !     npart = 0
+        !   end if
+
+        !   call particle_advect_std(p_loc_trans,temp_vel,npart)           
+
+          ! ***********************
+          ! Save additional fields
+          ! ***********************
+          if (ifoutfld) then
+              ! Output orthogonal grid
+!             ifreguo = .true.
+
+!              ifto = .true.
+!			  if (istep .eq. 1) then
+              	call copy(t(1,1,1,1,1),Amatrix,n)
+!			  end if
+!              ifto = .true.
+!              call lambda2(t(1,1,1,1,1)) ! Put lambda2 into temperature field
+
+            ! if ( nid .eq. 0) then
+            !     p_loc = transpose(p_loc_trans)
+            !     write(filename_part,'("particles-t-",i5.5,".csv")')istep
+            !     open(31, file = filename_part, status = "replace")
+            !       do i = 1, INTP_NMAX
+            !           write(31, "(*(e15.8))")p_loc(i,:)
+            !       end do
+            !     close(31)
+            ! end if
+              
+        end if
+
+		  !************************
+		  !Calling ADM to actuate the disk, comment out for steady disk
+		  !call ADM
+
+          return
+      end
+!-----------------------------------------------------------------------
+      subroutine userqtl ! Set thermal divergence
+
+!      call userqtl_scig 
+
+      return
+      end
+!-----------------------------------------------------------------------
+      subroutine usrdat()   ! This routine to modify element vertices
+
+!      implicit none
+
+      include 'SIZE'
+      include 'TOTAL'
+
+!       integer n
+!       real ymin, ymax
+ 
+       ! Modify y-coordinate of elements
+!       n = nelv * 2**ldim
+!       ymin = glmin(yc,n)
+!       ymax = glmax(yc,n)
+ 
+!       do i = 1,n
+!           yc(i,1) = ymin + (ymax - ymin) * (tanh(BETAM * (yc(i,1)/(ymax-ymin)-1)) / tanh(BETAM) + 1)
+!       end do
+
+      return
+      end
+!-----------------------------------------------------------------------
+      subroutine usrdat2()  ! This routine to modify mesh coordinates
+
+!         implicit none
+
+          include 'SIZE'
+          include 'TOTAL'
+
+          return
+      end
+!-----------------------------------------------------------------------
+      subroutine usrdat3()
+
+          implicit none
+
+          include 'SIZE'
+          include 'TOTAL'
+
+          integer n, i, seed_i
+          real xp, yp, zp
+
+          real ub(lx1,ly1,lz1,lelt), vb(lx1,ly1,lz1,lelt)
+          common /blasiusvel/ ub, vb
+
+		  real dia, thick, angle, Amatrix(lx1,ly1,lz1,lelt)
+		  common /adm_yaw/ dia, thick, angle, Amatrix
+
+          real p_loc(INTP_NMAX,ldim), p_loc_trans(ldim,INTP_NMAX)    
+          common /tracer_particles/ p_loc, p_loc_trans
+
+          ! Set blasius velocity profile
+!          call set_blasius(ub, vb)
+
+!         ! Output orthogonal grid
+!         ifreguo = .true.
+          !Calling ADM for initial Disk nodes identification 
+		  call ADM
+          ! Prepare synthetic turbulent inflow condition
+!          call set_turbulent_inflow
+         
+            open(100, file='tracer_particles.csv',status='old',action='read')
+            do i = 1, INTP_NMAX
+                read(100,*)p_loc(i,:)
+            end do
+            close(100)
+            p_loc_trans = transpose(p_loc)
+            return
+
+      end
+!-----------------------------------------------------------------------
+      subroutine set_blasius(ub,vb)
+          
+          implicit none
+
+          include 'SIZE'
+          include 'TOTAL'
+
+          integer n, i
+          real ub(lx1,ly1,lz1,lelt), vb(lx1,ly1,lz1,lelt)
+          real nu, U_inf, x_start
+          real xp, yp, eta_tmp, f_tmp, fp_tmp, Rex
+
+          real eta(10001), f(10001), fp(10001)
+
+          ! 1. Solve the Falkner–Skan equation.
+          call solve_blasius(eta, f, fp)
+
+          ! 2. Iterate through all points and compute Blasius velocity
+          !    from the presolved FS equation. For locations not in eta,
+          !    do linear interpolation.
+
+          n = nx1*ny1*nz1*nelv
+
+          nu = param(2) / param(1) ! Kinematic viscosity
+          x_start = uparam(1)      ! Momentum thickness at the inlet (x = 0)
+          U_inf = uparam(2)        ! Free-steram velocity
+
+          do i = 1, n
+              xp = xm1(i,1,1,1) + x_start
+              yp = ym1(i,1,1,1)
+              Rex = U_inf * xp / nu
+
+              eta_tmp = yp / xp * sqrt(Rex)
+              call pwl_value_1d(10001,eta,f,1,eta_tmp,f_tmp)
+              call pwl_value_1d(10001,eta,fp,1,eta_tmp,fp_tmp)
+
+              ub(i,1,1,1) = U_inf * fp_tmp
+              vb(i,1,1,1) = U_inf * (eta_tmp * fp_tmp - f_tmp)/(2.0 * sqrt(Rex))
+          end do
+
+          return
+      end
+!-----------------------------------------------------------------------
+      subroutine solve_blasius(eta,f,fp)
+          
+          implicit none
+
+          include 'SIZE'
+          include 'TOTAL'
+
+          real, intent(out) :: eta(10001), f(10001), fp(10001)
+          real, parameter :: deta = 1.e-6
+          real f_tmp, fp_tmp, fpp_tmp, fppp_tmp, eta_tmp
+          integer i
+
+          f_tmp = 0
+          fp_tmp = 0
+          fpp_tmp = 0.332
+          fppp_tmp = 0
+          eta_tmp = 0
+          i = 1
+
+          do while (eta_tmp <= 10.0)
+              fpp_tmp = fpp_tmp + deta * fppp_tmp
+              fp_tmp = fp_tmp + deta * fpp_tmp
+              f_tmp = f_tmp + deta * fp_tmp
+              fppp_tmp = -0.5 * f_tmp * fpp_tmp
+
+              if (mod(i-1,1000) == 0) then
+                  eta(i/1000+1) = eta_tmp
+                  f(i/1000+1) = f_tmp
+                  fp(i/1000+1) = fp_tmp
+              end if
+
+              i = i + 1
+              eta_tmp = eta_tmp + deta
+          end do
+
+          return
+      end
+!-----------------------------------------------------------------------
+! Linear interpolation
+      subroutine pwl_basis_1d(nd,xd,ni,xi,bk)
+      !
+      !! PWL_BASIS_1D evaluates a 1D piecewise linear basis function.
+      !
+      !  Licensing:
+      !
+      !    This code is distributed under the GNU LGPL license.
+      !
+      !  Modified:
+      !
+      !    01 July 2015
+      !
+      !  Author:
+      !
+      !    John Burkardt
+      !
+      !  Parameters:
+      !
+      !    Input, integer ND, the number of data points.
+      !    Input, real ( kind = rk ) XD(ND), the data points.
+      !    Input, integer NI, the number of interpolation points.
+      !    Input, real ( kind = rk ) XI(NI), the interpolation points.
+      !    Output, real ( kind = rk ) BK(NI,ND), the basis functions at the 
+      !    interpolation points.
+      !
+          implicit none
+      
+          integer, parameter :: rk = kind (1.0D+00)
+      
+          integer nd
+          integer ni
+      
+          real (kind = rk) bk(ni,nd)
+          integer i
+          integer j
+          real (kind = rk) t
+          real (kind = rk) xd(nd)
+          real (kind = rk) xi(ni)
+      
+          bk(1:ni,1:nd) = 0.0D+00
+      
+          if ( nd == 1 ) then
+              bk(1:ni,1:nd) = 1.0D+00
+              return
+          end if
+      
+          do i = 1, ni
+              do j = 1, nd
+                  if ( j == 1 .and. xi(i) <= xd(j) ) then
+                      t = ( xi(i) - xd(j) ) / ( xd(j+1) - xd(j) )
+                      bk(i,j) = 1.0D+00 - t
+                  else if ( j == nd .and. xd(j) <= xi(i) ) then
+                      t = ( xi(i) - xd(j-1) ) / ( xd(j) - xd(j-1) )
+                      bk(i,j) = t
+                  else if ( xd(j-1) < xi(i) .and. xi(i) <= xd(j) ) then
+                      t = ( xi(i) - xd(j-1) ) / ( xd(j) - xd(j-1) )
+                      bk(i,j) = t
+                  else if ( xd(j) <= xi(i) .and. xi(i) < xd(j+1) ) then
+                      t = ( xi(i) - xd(j) ) / ( xd(j+1) - xd(j) )
+                      bk(i,j) = 1.0D+00 - t
+                  end if
+              end do
+          end do
+          return
+      end
+!-----------------------------------------------------------------------
+      subroutine pwl_value_1d(nd,xd,yd,ni,xi,yi)
+      !
+      !! PWL_VALUE_1D evaluates the piecewise linear interpolant.
+      !
+      !  Discussion:
+      !
+      !    The piecewise linear interpolant L(ND,XD,YD)(X) is the piecewise
+      !    linear function which interpolates the data (XD(I),YD(I)) for I = 1
+      !    to ND.
+      !
+      !  Licensing:
+      !
+      !    This code is distributed under the GNU LGPL license.
+      !
+      !  Modified:
+      !
+      !    22 September 2012
+      !
+      !  Author:
+      !
+      !    John Burkardt
+      !
+      !  Parameters:
+      !
+      !    Input, integer ND, the number of data points.
+      !    ND must be at least 1.
+      !    Input, real ( kind = rk ) XD(ND), the data points.
+      !    Input, real ( kind = rk ) YD(ND), the data values.
+      !    Input, integer NI, the number of interpolation points.
+      !    Input, real ( kind = rk ) XI(NI), the interpolation points.
+      !    Output, real ( kind = rk ) YI(NI), the interpolated values.
+      !
+          implicit none
+        
+          integer, parameter :: rk = kind (1.0D+00)
+        
+          integer nd
+          integer ni
+        
+          integer i
+          integer k
+          real (kind = rk) t
+          real (kind = rk) xd(nd)
+          real (kind = rk) yd(nd)
+          real (kind = rk) xi(ni)
+          real (kind = rk) yi(ni)
+        
+          yi(1:ni) = 0.0D+00
+        
+          if ( nd == 1 ) then
+              yi(1:ni) = yd(1)
+              return
+          end if
+        
+          do i = 1, ni
+              if ( xi(i) <= xd(1) ) then
+                  t = ( xi(i) - xd(1) ) / ( xd(2) - xd(1) )
+                  yi(i) = ( 1.0D+00 - t ) * yd(1) + t * yd(2)
+              else if ( xd(nd) <= xi(i) ) then
+                  t = ( xi(i) - xd(nd-1) ) / ( xd(nd) - xd(nd-1) )
+                  yi(i) = ( 1.0D+00 - t ) * yd(nd-1) + t * yd(nd)
+              else
+                  do k = 2, nd
+                      if ( xd(k-1) <= xi(i) .and. xi(i) <= xd(k) ) then
+                          t = ( xi(i) - xd(k-1) ) / ( xd(k) - xd(k-1) )
+                          yi(i) = ( 1.0D+00 - t ) * yd(k-1) + t * yd(k)
+                          exit
+                      end if
+                  end do
+              end if
+          end do
+          return
+      end
+!---------------------------------------------------------
+	subroutine ADM
+			
+          implicit none
+		  
+		  real xp, yp, zp, t1(2), t2(2), n1, n2
+		  real yaw_max, xl
+		  real t11, t13, t21, t23
+		  real x_c, y_c, z_c
+		  real dia, thick
+		  integer i, n
+
+          include 'SIZE'
+          include 'TOTAL'
+          include 'NEKUSE'
+
+          real fxintg(lx1,ly1,lz1,lelt), fyintg(lx1,ly1,lz1,lelt), fzintg(lx1,ly1,lz1,lelt)
+          integer imatrix(lx1,ly1,lz1,lelt)
+          common /ibforces/ fxintg, fyintg, fzintg, imatrix
+		  
+		  real angle, Amatrix(lx1,ly1,lz1,lelt)
+		  common /adm_yaw/ dia, thick, angle, Amatrix
+	
+		  xl = 7.5
+		  x_c = 2.5
+		  y_c = 0.75
+		  z_c = 0.75
+		  dia = 0.3
+		  thick = 0.05
+		  yaw_max = pi/6
+          angle = yaw_max
+		  n1 = cos(angle)
+		  n2 = -sin(angle)
+		  t11 = x_c - cos(angle)*thick/2.0
+		  t13 = z_c + sin(angle)*thick/2.0
+		  t21 = x_c + cos(angle)*thick/2.0
+		  t23 = z_c - sin(angle)*thick/2.0
+		  n = nx1*ny1*nz1*nelv
+		  do i = 1, n
+		  	xp = xm1(i,1,1,1)
+			yp = ym1(i,1,1,1)
+			zp = zm1(i,1,1,1)
+				if (sqrt((xp-x_c)**2+(yp-y_c)**2+(zp-z_c)**2) <= dia/2) then
+					t1 = (/ n1*(xp-t11),n2*(zp-t13) /)
+					t2 = (/ n1*(xp-t21),n2*(zp-t23) /)
+					if (sum(t1) >= 0.0 .and. sum(t2) <= 0.0) then 
+						imatrix(i,1,1,1) = 2
+						Amatrix(i,1,1,1) = 1.0
+					else 						
+						imatrix(i,1,1,1) = 0
+						Amatrix(i,1,1,1) = 0.0
+					end if	
+				end if
+		  end do
+	return
+	end
+!-----------------------------------------------------------------------
+      subroutine particle_advect_std(x,vh,n)
+
+!     Lagrangian particle advection
+
+      include 'SIZE'
+      include 'TOTAL'
+
+      real x(ldim,INTP_NMAX),vh(ldim,2:3,INTP_NMAX)
+      real u1(ldim,INTP_NMAX)
+
+      if (istep.eq.0) then      ! AB1
+         call rzero(vh,3*ldim*n) 
+         c1 = 1.
+         c2 = 0.
+         c3 = 0.
+      elseif (istep.eq.1) then  ! AB2
+         c1 = 3
+         c2 = -1.
+         c3 = 0
+         c1 = c1/2.
+         c2 = c2/2.
+      else                    ! AB3
+         c1 = 23.
+         c2 = -16.
+         c3 = 5.
+         c1 = c1/12.
+         c2 = c2/12.
+         c3 = c3/12.
+      endif
+
+ 
+      call interp_v(u1,x,n) 
+
+      do i=1,n
+        do k=1,ldim
+    !     Update particle position and history
+            x(k,i) = x(k,i) + dt*(c1*u1(k,i) + c2*vh(k,2,i) + c3*vh(k,3,i))
+    !     Update particle and fluid velocity history
+            vh(k,3,i) = vh(k,2,i)
+            vh(k,2,i) = u1(k,i)
+        enddo
+      enddo
+
+      return
+      end
+!----------------------------------------------------------------------
+      subroutine interp_v(uvw,xyz,n)
+        !
+        !     evaluate velocity for list of points xyz
+        !
+              include 'SIZE'
+              include 'TOTAL'
+        
+              real uvw(ldim,n),xyz(ldim,n)
+        
+              real    rwk(INTP_NMAX,ldim+1) ! r, s, t, dist2
+              integer iwk(INTP_NMAX,3)      ! code, proc, el
+              save    rwk, iwk
+        
+              integer intp_h
+              save    intp_h
+        
+              real fwrk(lx1*ly1*lz1*lelt,ldim), fpts(ldim*INTP_NMAX), pts(ldim*INTP_NMAX)
+        
+              integer icalld,e
+              save    icalld
+              data    icalld /0/
+        
+              nxyz  = nx1*ny1*nz1
+              ntot  = nxyz*nelt
+        
+              !if (n.gt.INTP_NMAX) call exitti ('n > INTP_NMAX in interp_v!$',n)
+              
+              !if (nelgt.ne.nelgv) call exitti ('nelgt.ne.nelgv not yet supported in interp_v!$',nelgv)
+        
+              do i=1,n				! ? not moving -> save?
+                 pts(i)     = xyz(1,i)
+                 pts(i + n) = xyz(2,i)
+                 if (if3d) pts(i + n*2) = xyz(3,i)
+              enddo
+              !write(*,*) pts(1), pts(1+n), pts(1+2*n)                    
+
+              if (icalld.eq.0) then
+                    icalld = 1
+                    call interp_setup(intp_h,0.0,0,nelt)
+              endif
+              ! pack working array
+              call opcopy(fwrk(1,1),fwrk(1,2),fwrk(1,3),vx,vy,vz)
+                
+              ! interpolate
+              call interp_nfld(fpts,fwrk,ldim,pts(1),pts(1+n),pts(2*n+1),n,iwk,rwk,INTP_NMAX,.true.,intp_h)
+        
+              do i=1,n
+                 uvw(1,i) = fpts(i)
+                 uvw(2,i) = fpts(i + n)
+                 if(if3d) uvw(3,i) = fpts(i + n*2)
+              enddo
+        
+              return
+              end
+!-----------------------------------------------------------------------
